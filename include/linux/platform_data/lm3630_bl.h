@@ -22,7 +22,9 @@ struct lm3630_platform_data {
 	int boost_ctrl_reg;
 	int bank_sel;
 	int linear_map;
+	int min_current;
 	int max_current;
+	int default_current;
 	int min_brightness;
 	int max_brightness;
 	int default_brightness;

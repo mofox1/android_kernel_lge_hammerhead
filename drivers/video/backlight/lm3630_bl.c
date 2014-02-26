@@ -88,7 +88,9 @@ struct lm3630_device {
 	int bank_sel;
 	int cfg_reg;
 	int linear_map;
+	int min_current;
 	int max_current;
+	int default_current;
 	int min_brightness;
 	int max_brightness;
 	int default_brightness;
@@ -207,34 +209,6 @@ static void lm3630_set_brightness_reg(struct lm3630_device *dev, int level)
 	}
 }
 
-static void lm3630_set_main_current_level(struct i2c_client *client, int level)
-{
-	struct lm3630_device *dev = i2c_get_clientdata(client);
-
-	mutex_lock(&backlight_mtx);
-	dev->bl_dev->props.brightness = level;
-	if (level != 0) {
-		if (level < dev->min_brightness)
-			level = dev->min_brightness;
-		else if (level > dev->max_brightness)
-			level = dev->max_brightness;
-
-		if (dev->blmap) {
-			if (level < dev->blmap_size)
-				lm3630_set_brightness_reg(dev, dev->blmap[level]);
-			else
-				pr_err("%s: invalid index %d:%d\n", __func__,
-						dev->blmap_size, level);
-		} else {
-			lm3630_set_brightness_reg(dev, level);
-		}
-	} else {
-		lm3630_write_reg(client, CONTROL_REG, BL_OFF);
-	}
-	mutex_unlock(&backlight_mtx);
-	pr_debug("%s: level=%d\n", __func__, level);
-}
-
 static void lm3630_set_max_current_reg(struct lm3630_device *dev, int val)
 {
 	if (dev->bank_sel == LED_BANK_A) {
@@ -245,6 +219,32 @@ static void lm3630_set_max_current_reg(struct lm3630_device *dev, int val)
 		lm3630_write_reg(dev->client, CURRENT_A_REG, val);
 		lm3630_write_reg(dev->client, CURRENT_B_REG, val);
 	}
+}
+
+static void lm3630_set_main_current_level(struct i2c_client *client, int level)
+{
+	struct lm3630_device *dev = i2c_get_clientdata(client);
+	int max_current;
+
+	mutex_lock(&backlight_mtx);
+	dev->bl_dev->props.brightness = level;
+	if (level > 0) {
+		if (level <= dev->min_brightness) {
+			level = dev->min_brightness;
+			max_current = dev->min_brightness;
+		} else if (level >= dev->max_brightness) {
+			level = dev->max_brightness;
+			max_current = dev->max_current;
+		} else {
+			max_current = dev->default_current;
+		}
+		lm3630_set_brightness_reg(dev, level);
+		lm3630_set_max_current_reg(dev, max_current);
+	} else {
+		lm3630_write_reg(client, CONTROL_REG, BL_OFF);
+	}
+	mutex_unlock(&backlight_mtx);
+	pr_debug("%s: level=%d\n", __func__, level);
 }
 
 static void lm3630_hw_init(struct lm3630_device *dev)
@@ -457,6 +457,20 @@ static int lm3630_parse_dt(struct device_node *node,
 		goto error;
 	}
 
+	rc = of_property_read_u32(node, "lm3630,min_current",
+				&dev->min_current);
+	if (rc) {
+		pr_err("%s: failed to get lm3630,min_current\n", __func__);
+		goto error;
+	}
+
+	rc = of_property_read_u32(node, "lm3630,default_current",
+				&dev->default_current);
+	if (rc) {
+		pr_err("%s: failed to get lm3630,default_current\n", __func__);
+		goto error;
+	}
+
 	rc = of_property_read_u32(node, "lm3630,max_current",
 				&dev->max_current);
 	if (rc) {
@@ -586,6 +600,8 @@ static int lm3630_probe(struct i2c_client *client,
 		dev->boost_ctrl_reg = pdata->boost_ctrl_reg;
 		dev->bank_sel = pdata->bank_sel;
 		dev->linear_map = pdata->linear_map;
+		dev->min_current = pdata->min_current;
+		dev->default_current = pdata->default_current;
 		dev->max_current = pdata->max_current;
 		dev->min_brightness = pdata->min_brightness;
 		dev->default_brightness = pdata->default_brightness;
