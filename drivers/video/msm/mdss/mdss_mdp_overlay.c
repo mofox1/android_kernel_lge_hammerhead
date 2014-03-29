@@ -917,6 +917,15 @@ int mdss_mdp_overlay_kickoff(struct msm_fb_data_type *mfd,
 	if (data)
 		mdss_mdp_set_roi(ctl, data);
 
+	/*
+	 * Setup pipe in solid fill before unstaging,
+	 * to ensure no fetches are happening after dettach or reattach.
+	 */
+	list_for_each_entry(pipe, &mdp5_data->pipes_cleanup, cleanup_list) {
+		mdss_mdp_pipe_queue_data(pipe, NULL);
+		mdss_mdp_mixer_pipe_unstage(pipe);
+	}
+
 	list_for_each_entry(pipe, &mdp5_data->pipes_used, used_list) {
 		struct mdss_mdp_data *buf;
 		/*
@@ -959,11 +968,13 @@ int mdss_mdp_overlay_kickoff(struct msm_fb_data_type *mfd,
 			pipe->mixer = mdss_mdp_mixer_get(tmp,
 					MDSS_MDP_MIXER_MUX_DEFAULT);
 		}
+
+		/* ensure pipes are always reconfigured after power off/on */
+		if (pipe->play_cnt == 0)
+			pipe->params_changed++;
+
 		if (pipe->back_buf.num_planes) {
 			buf = &pipe->back_buf;
-		} else if (ctl->play_cnt == 0 && pipe->front_buf.num_planes) {
-			pipe->params_changed++;
-			buf = &pipe->front_buf;
 		} else if (!pipe->params_changed) {
 			continue;
 		} else if (pipe->front_buf.num_planes) {
@@ -1048,7 +1059,6 @@ static int mdss_mdp_overlay_release(struct msm_fb_data_type *mfd, int ndx)
 						&mdp5_data->pipes_cleanup);
 			}
 			mutex_unlock(&mfd->lock);
-			mdss_mdp_mixer_pipe_unstage(pipe);
 			mdss_mdp_pipe_unmap(pipe);
 			if (destroy_pipe)
 				mdss_mdp_pipe_destroy(pipe);
@@ -1196,10 +1206,6 @@ static int mdss_mdp_overlay_queue(struct msm_fb_data_type *mfd,
 		pr_warn("Unexpected buffer queue to a solid fill pipe\n");
 
 	flags = (pipe->flags & MDP_SECURE_OVERLAY_SESSION);
-	flags |= (pipe->flags & MDP_SECURE_DISPLAY_OVERLAY_SESSION);
-
-	if (!mfd->panel_info->cont_splash_enabled)
-		mdss_iommu_attach(mdata);
 
 	src_data = &pipe->back_buf;
 	if (src_data->num_planes) {
